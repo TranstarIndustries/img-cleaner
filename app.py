@@ -1,17 +1,16 @@
 import math
+import os
+from io import BytesIO
 from typing import Tuple
 from urllib.parse import quote
-
-import requests
 
 import cv2
 import keras_ocr
 import matplotlib.pyplot as plt
-from PIL import Image
-import requests
-from io import BytesIO
 import numpy as np
 import pandas as pd
+import requests
+from PIL import Image
 
 
 def midpoint(x1: int, y1: int, x2: int, y2:int) -> Tuple[int, int]:
@@ -138,7 +137,7 @@ def sobel(pipeline, image_gray, offset):
     masked_image = remove(image_gray, bb, offset)
     return masked_image
 
-def img_cleaner_pipeline(img_path: str, sku: str, pipeline: keras_ocr.pipeline.Pipeline) -> np.ndarray:
+def text_removal_pipeline(img_path: str, sku: str, pipeline: keras_ocr.pipeline.Pipeline) -> np.ndarray:
 
     response = requests.get(img_path) 
     before_img = Image.open(BytesIO(response.content))
@@ -153,6 +152,20 @@ def img_cleaner_pipeline(img_path: str, sku: str, pipeline: keras_ocr.pipeline.P
     cv2.imwrite(f'text_removed/{sku}.jpg', img_rgb)
 
     #compare_fig(sku, before_img, img_text_removed)
+
+def img_resize_pipeline(img_path: str, sku: str, pipeline: keras_ocr.pipeline.Pipeline) -> np.ndarray:
+   response = requests.get(img_path) 
+   before_img = np.array(Image.open(BytesIO(response.content)))
+   img_zoom = zoom_at(before_img, zoom=1.5, angle=0, coord=None)
+   # save the image
+   img_rgb = cv2.cvtColor(img_zoom, cv2.COLOR_BGR2RGB)
+   cv2.imwrite(f'img_zoom/{sku}.jpg', img_rgb) 
+
+def zoom_at(img, zoom=1, angle=0, coord=None)->np.ndarray:
+    cy, cx = [ i/2 for i in img.shape[:-1] ] if coord is None else coord[::-1]
+    rot_mat = cv2.getRotationMatrix2D((cx,cy), angle, zoom)
+    result = cv2.warpAffine(img, rot_mat, img.shape[1::-1], flags=cv2.INTER_LINEAR)
+    return result
 
 def compare_fig(sku, before_img, img_text_removed):
     fig, axes = plt.subplots(1, 2, figsize=(10, 5))
@@ -182,11 +195,9 @@ def get_image_path(sku: str) -> str:
     Returns:
     image_path (str): The path to the image file
     """
-    #image_path = f"images/{sku}.jpg"
-    #apiToken = "nQev13tFnITKMn173PMEWmGQt4ogq1DdNYravcfRIXL7mqz3MHAZEPPJJYiRHIgeM/jkUnKwxC868FIUkyhOmw=="
-    apiToken = "cDZdYXKGLNprECr6wDJ4cyJ2gm/pGwx4hziCx7JcmSe35D1xYlnoVKIzbvuKEXNTuTIvjPorti/6kIqoOZOjQg=="
-    apiKey = "j495pu256SFZ7rdInW4X61vXLOelAbv9YZVtDaQh"
-    headers = {"Authorization": f"Bearer {apiToken}", "x-api-key": apiKey}
+    api_token = os.environ.get("TRANSEND_API_TOKEN")
+    api_key = os.environ.get("TRANSEND_API_KEY")
+    headers = {"Authorization": f"Bearer {api_token}", "x-api-key": api_key}
     url = f"https://api.transend.us/product/?itemNumber={sku}"
     res = requests.get(url, headers=headers)
     response = res.json()
@@ -198,12 +209,9 @@ def get_image_path(sku: str) -> str:
 
 pipeline = keras_ocr.pipeline.Pipeline()
 # load img-supression.csv and iterate through the rows
-# if the Error Message contains "text, logo, graphic or watermark", then run the img_cleaner_pipeline function
-
-# load img-supression.csv and iterate through the rows
 df = pd.read_csv('img-supression.csv')
 df.drop_duplicates(subset=['SKU'], keep=False, inplace=True)
-sample = df.sample(10, replace=False)
+#sample = df.sample(10, replace=False)
 for index, row in df.iterrows():
     print("cleaning: ", row['SKU'])
     sku = row['SKU']
@@ -212,10 +220,18 @@ for index, row in df.iterrows():
         continue
     if 'text, logo, graphic or watermark' in row['Error Details']:
         try:
-          img_cleaner_pipeline(img_path, sku, pipeline)
+          text_removal_pipeline(img_path, sku, pipeline)
           print(f"Image {img_path} cleaned for SKU {sku}")
         except Exception as e:
             print(f"Image not cleaned for SKU {row['SKU']}")
+            print(e)
+            continue
+    if 'too small in the image frame' in row['Error Details']:
+        try:
+          img_resize_pipeline(img_path, sku, pipeline)
+          print(f"Image {img_path} cleaned for SKU {sku}")
+        except Exception as e:
+            print(f"Image not re-sized for SKU {row['SKU']}")
             print(e)
             continue
     else:
